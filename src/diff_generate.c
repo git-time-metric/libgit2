@@ -7,6 +7,7 @@
 #include "common.h"
 #include "diff.h"
 #include "diff_generate.h"
+#include "patch_generate.h"
 #include "fileops.h"
 #include "config.h"
 #include "attr_file.h"
@@ -414,6 +415,7 @@ static git_diff_generated *diff_generated_alloc(
 	diff->base.repo = repo;
 	diff->base.old_src = old_iter->type;
 	diff->base.new_src = new_iter->type;
+	diff->base.patch_fn = git_patch_generated_from_diff;
 	diff->base.free_fn = diff_generated_free;
 	memcpy(&diff->base.opts, &dflt, sizeof(git_diff_options));
 
@@ -622,7 +624,7 @@ int git_diff__oid_for_entry(
 		error = git_odb__hashlink(out, full_path.ptr);
 		diff->base.perf.oid_calculations++;
 	} else if (!git__is_sizet(entry.file_size)) {
-		giterr_set(GITERR_OS, "File size overflow (for 32-bits) on '%s'",
+		giterr_set(GITERR_OS, "file size overflow (for 32-bits) on '%s'",
 			entry.path);
 		error = -1;
 	} else if (!(error = git_filter_list_load(&fl,
@@ -1585,7 +1587,7 @@ int git_diff__commit(
 		char commit_oidstr[GIT_OID_HEXSZ + 1];
 
 		error = -1;
-		giterr_set(GITERR_INVALID, "Commit %s is a merge commit",
+		giterr_set(GITERR_INVALID, "commit %s is a merge commit",
 			git_oid_tostr(commit_oidstr, GIT_OID_HEXSZ + 1, git_commit_id(commit)));
 		goto on_error;
 	}

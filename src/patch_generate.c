@@ -206,35 +206,14 @@ static int patch_generated_load(git_patch_generated *patch, git_patch_generated_
 		 ((patch->nfile.flags & GIT_DIFF_FLAG__NO_DATA) != 0 ||
 		  (patch->nfile.file->flags & GIT_DIFF_FLAG_VALID_ID) != 0));
 
-	/* always try to load workdir content first because filtering may
-	 * need 2x data size and this minimizes peak memory footprint
-	 */
-	if (patch->ofile.src == GIT_ITERATOR_TYPE_WORKDIR) {
-		if ((error = git_diff_file_content__load(
-				&patch->ofile, &patch->base.diff_opts)) < 0 ||
-			should_skip_binary(patch, patch->ofile.file))
-			goto cleanup;
-	}
-	if (patch->nfile.src == GIT_ITERATOR_TYPE_WORKDIR) {
-		if ((error = git_diff_file_content__load(
-				&patch->nfile, &patch->base.diff_opts)) < 0 ||
-			should_skip_binary(patch, patch->nfile.file))
-			goto cleanup;
-	}
-
-	/* once workdir has been tried, load other data as needed */
-	if (patch->ofile.src != GIT_ITERATOR_TYPE_WORKDIR) {
-		if ((error = git_diff_file_content__load(
-				&patch->ofile, &patch->base.diff_opts)) < 0 ||
-			should_skip_binary(patch, patch->ofile.file))
-			goto cleanup;
-	}
-	if (patch->nfile.src != GIT_ITERATOR_TYPE_WORKDIR) {
-		if ((error = git_diff_file_content__load(
-				&patch->nfile, &patch->base.diff_opts)) < 0 ||
-			should_skip_binary(patch, patch->nfile.file))
-			goto cleanup;
-	}
+	if ((error = git_diff_file_content__load(
+			&patch->ofile, &patch->base.diff_opts)) < 0 ||
+		should_skip_binary(patch, patch->ofile.file))
+		goto cleanup;
+	if ((error = git_diff_file_content__load(
+			&patch->nfile, &patch->base.diff_opts)) < 0 ||
+		should_skip_binary(patch, patch->nfile.file))
+		goto cleanup;
 
 	/* if previously missing an oid, and now that we have it the two sides
 	 * are the same (and not submodules), update MODIFIED -> UNMODIFIED
@@ -284,7 +263,7 @@ static int create_binary(
 	size_t b_datalen)
 {
 	git_buf deflate = GIT_BUF_INIT, delta = GIT_BUF_INIT;
-	unsigned long delta_data_len;
+	size_t delta_data_len = 0;
 	int error;
 
 	/* The git_delta function accepts unsigned long only */
@@ -310,7 +289,7 @@ static int create_binary(
 
 		if (error == 0) {
 			error = git_zstream_deflatebuf(
-				&delta, delta_data, (size_t)delta_data_len);
+				&delta, delta_data, delta_data_len);
 
 			git__free(delta_data);
 		} else if (error == GIT_EBUFS) {
@@ -342,27 +321,33 @@ done:
 
 static int diff_binary(git_patch_generated_output *output, git_patch_generated *patch)
 {
-	git_diff_binary binary = {{0}};
+	git_diff_binary binary = {0};
 	const char *old_data = patch->ofile.map.data;
 	const char *new_data = patch->nfile.map.data;
 	size_t old_len = patch->ofile.map.len,
 		new_len = patch->nfile.map.len;
 	int error;
 
-	/* Create the old->new delta (as the "new" side of the patch),
-	 * and the new->old delta (as the "old" side)
-	 */
-	if ((error = create_binary(&binary.old_file.type,
-			(char **)&binary.old_file.data,
-			&binary.old_file.datalen,
-			&binary.old_file.inflatedlen,
-			new_data, new_len, old_data, old_len)) < 0 ||
-		(error = create_binary(&binary.new_file.type,
-			(char **)&binary.new_file.data,
-			&binary.new_file.datalen,
-			&binary.new_file.inflatedlen,
-			old_data, old_len, new_data, new_len)) < 0)
-		return error;
+	/* Only load contents if the user actually wants to diff
+	 * binary files. */
+	if (patch->base.diff_opts.flags & GIT_DIFF_SHOW_BINARY) {
+		binary.contains_data = 1;
+
+		/* Create the old->new delta (as the "new" side of the patch),
+		 * and the new->old delta (as the "old" side)
+		 */
+		if ((error = create_binary(&binary.old_file.type,
+				(char **)&binary.old_file.data,
+				&binary.old_file.datalen,
+				&binary.old_file.inflatedlen,
+				new_data, new_len, old_data, old_len)) < 0 ||
+			(error = create_binary(&binary.new_file.type,
+				(char **)&binary.new_file.data,
+				&binary.new_file.datalen,
+				&binary.new_file.inflatedlen,
+				old_data, old_len, new_data, new_len)) < 0)
+			return error;
+	}
 
 	error = giterr_set_after_callback_function(
 		output->binary_cb(patch->base.delta, &binary, output->payload),
@@ -411,56 +396,8 @@ static int diff_required(git_diff *diff, const char *action)
 {
 	if (diff)
 		return 0;
-	giterr_set(GITERR_INVALID, "Must provide valid diff to %s", action);
+	giterr_set(GITERR_INVALID, "must provide valid diff to %s", action);
 	return -1;
-}
-
-int git_diff_foreach(
-	git_diff *diff,
-	git_diff_file_cb file_cb,
-	git_diff_binary_cb binary_cb,
-	git_diff_hunk_cb hunk_cb,
-	git_diff_line_cb data_cb,
-	void *payload)
-{
-	int error = 0;
-	git_xdiff_output xo;
-	size_t idx;
-	git_patch_generated patch;
-
-	if ((error = diff_required(diff, "git_diff_foreach")) < 0)
-		return error;
-
-	memset(&xo, 0, sizeof(xo));
-	memset(&patch, 0, sizeof(patch));
-	diff_output_init(
-		&xo.output, &diff->opts, file_cb, binary_cb, hunk_cb, data_cb, payload);
-	git_xdiff_init(&xo, &diff->opts);
-
-	git_vector_foreach(&diff->deltas, idx, patch.base.delta) {
-
-		/* check flags against patch status */
-		if (git_diff_delta__should_skip(&diff->opts, patch.base.delta))
-			continue;
-
-		if (binary_cb || hunk_cb || data_cb) {
-			if ((error = patch_generated_init(&patch, diff, idx)) != 0 ||
-				(error = patch_generated_load(&patch, &xo.output)) != 0)
-				return error;
-		}
-
-		if ((error = patch_generated_invoke_file_callback(&patch, &xo.output)) == 0) {
-			if (binary_cb || hunk_cb || data_cb)
-					error = patch_generated_create(&patch, &xo.output);
-		}
-
-		git_patch_free(&patch.base);
-
-		if (error)
-			break;
-	}
-
-	return error;
 }
 
 typedef struct {
@@ -488,8 +425,17 @@ static int diff_single_generate(patch_generated_with_delta *pd, git_xdiff_output
 	patch_generated_init_common(patch);
 
 	if (pd->delta.status == GIT_DELTA_UNMODIFIED &&
-		!(patch->ofile.opts_flags & GIT_DIFF_INCLUDE_UNMODIFIED))
+		!(patch->ofile.opts_flags & GIT_DIFF_INCLUDE_UNMODIFIED)) {
+
+		/* Even empty patches are flagged as binary, and even though
+		 * there's no difference, we flag this as "containing data"
+		 * (the data is known to be empty, as opposed to wholly unknown).
+		 */
+		if (patch->base.diff_opts.flags & GIT_DIFF_SHOW_BINARY)
+			patch->base.binary.contains_data = 1;
+
 		return error;
+	}
 
 	error = patch_generated_invoke_file_callback(patch, (git_patch_generated_output *)xo);
 
@@ -746,7 +692,7 @@ int git_patch_from_buffers(
 	return patch_from_sources(out, &osrc, &nsrc, opts);
 }
 
-int git_patch_from_diff(
+int git_patch_generated_from_diff(
 	git_patch **patch_ptr, git_diff *diff, size_t idx)
 {
 	int error = 0;
@@ -761,7 +707,7 @@ int git_patch_from_diff(
 
 	delta = git_vector_get(&diff->deltas, idx);
 	if (!delta) {
-		giterr_set(GITERR_INVALID, "Index out of range for delta in diff");
+		giterr_set(GITERR_INVALID, "index out of range for delta in diff");
 		return GIT_ENOTFOUND;
 	}
 

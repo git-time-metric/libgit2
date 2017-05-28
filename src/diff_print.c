@@ -222,7 +222,7 @@ static int diff_print_one_raw(
 
 	if (pi->id_strlen > id_abbrev) {
 		giterr_set(GITERR_PATCH,
-			"The patch input contains %d id characters (cannot print %d)",
+			"the patch input contains %d id characters (cannot print %d)",
 			id_abbrev, pi->id_strlen);
 		return -1;
 	}
@@ -273,7 +273,7 @@ static int diff_print_oid_range(
 	if (delta->old_file.mode &&
 			id_strlen > delta->old_file.id_abbrev) {
 		giterr_set(GITERR_PATCH,
-			"The patch input contains %d id characters (cannot print %d)",
+			"the patch input contains %d id characters (cannot print %d)",
 			delta->old_file.id_abbrev, id_strlen);
 		return -1;
 	}
@@ -281,7 +281,7 @@ static int diff_print_oid_range(
 	if ((delta->new_file.mode &&
 			id_strlen > delta->new_file.id_abbrev)) {
 		giterr_set(GITERR_PATCH,
-			"The patch input contains %d id characters (cannot print %d)",
+			"the patch input contains %d id characters (cannot print %d)",
 			delta->new_file.id_abbrev, id_strlen);
 		return -1;
 	}
@@ -500,7 +500,6 @@ static int diff_print_patch_file_binary_noshow(
 			&new_path, new_pfx, delta->new_file.path)) < 0)
 		goto done;
 
-
 	pi->line.num_lines = 1;
 	error = diff_delta_format_with_paths(
 		pi->buf, delta, "Binary files %s and %s differ\n",
@@ -521,12 +520,12 @@ static int diff_print_patch_file_binary(
 	size_t pre_binary_size;
 	int error;
 
-	if ((pi->flags & GIT_DIFF_SHOW_BINARY) == 0)
+	if (delta->status == GIT_DELTA_UNMODIFIED)
+		return 0;
+
+	if ((pi->flags & GIT_DIFF_SHOW_BINARY) == 0 || !binary->contains_data)
 		return diff_print_patch_file_binary_noshow(
 			pi, delta, old_pfx, new_pfx);
-
-	if (binary->new_file.datalen == 0 && binary->old_file.datalen == 0)
-		return 0;
 
 	pre_binary_size = pi->buf->size;
 	git_buf_printf(pi->buf, "GIT binary patch\n");
@@ -563,8 +562,11 @@ static int diff_print_patch_file(
 	bool binary = (delta->flags & GIT_DIFF_FLAG_BINARY) ||
 		(pi->flags & GIT_DIFF_FORCE_BINARY);
 	bool show_binary = !!(pi->flags & GIT_DIFF_SHOW_BINARY);
-	int id_strlen = binary && show_binary ?
-		GIT_OID_HEXSZ : pi->id_strlen;
+	int id_strlen = pi->id_strlen;
+
+	if (binary && show_binary)
+		id_strlen = delta->old_file.id_abbrev ? delta->old_file.id_abbrev :
+			delta->new_file.id_abbrev;
 
 	GIT_UNUSED(progress);
 
@@ -678,7 +680,7 @@ int git_diff_print(
 		print_file = diff_print_one_name_status;
 		break;
 	default:
-		giterr_set(GITERR_INVALID, "Unknown diff output format (%d)", format);
+		giterr_set(GITERR_INVALID, "unknown diff output format (%d)", format);
 		return -1;
 	}
 
@@ -706,7 +708,7 @@ int git_diff_print_callback__to_buf(
 	GIT_UNUSED(delta); GIT_UNUSED(hunk);
 
 	if (!output) {
-		giterr_set(GITERR_INVALID, "Buffer pointer must be provided");
+		giterr_set(GITERR_INVALID, "buffer pointer must be provided");
 		return -1;
 	}
 

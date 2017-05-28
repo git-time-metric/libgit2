@@ -55,6 +55,18 @@ extern int git_sysdir_find_programdata_file(git_buf *path, const char *filename)
  */
 extern int git_sysdir_find_template_dir(git_buf *path);
 
+/**
+ * Expand the name of a "global" file (i.e. one in a user's home
+ * directory).  Unlike `find_global_file` (above), this makes no
+ * attempt to check for the existence of the file, and is useful if
+ * you want the full path regardless of existence.
+ *
+ * @param path buffer to write the full path into
+ * @param filename name of file in the home directory
+ * @return 0 on success or -1 on error
+ */
+extern int git_sysdir_expand_global_file(git_buf *path, const char *filename);
+
 typedef enum {
 	GIT_SYSDIR_SYSTEM = 0,
 	GIT_SYSDIR_GLOBAL = 1,
@@ -102,10 +114,5 @@ extern int git_sysdir_get_str(char *out, size_t outlen, git_sysdir_t which);
  * @return 0 on success, <0 on failure (allocation error)
  */
 extern int git_sysdir_set(git_sysdir_t which, const char *paths);
-
-/**
- * Free the configuration file search paths.
- */
-extern void git_sysdir_global_shutdown(void);
 
 #endif /* INCLUDE_sysdir_h__ */

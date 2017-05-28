@@ -11,35 +11,64 @@
 #define GIT_IGNORE_DEFAULT_RULES ".\n..\n.git\n"
 
 /**
- * A negative ignore pattern can match a positive one without
- * wildcards if its pattern equals the tail of the positive
- * pattern. Thus
+ * A negative ignore pattern can negate a positive one without
+ * wildcards if it is a basename only and equals the basename of
+ * the positive pattern. Thus
  *
  * foo/bar
  * !bar
  *
- * would result in foo/bar being unignored again.
+ * would result in foo/bar being unignored again while
+ *
+ * moo/foo/bar
+ * !foo/bar
+ *
+ * would do nothing. The reverse also holds true: a positive
+ * basename pattern can be negated by unignoring the basename in
+ * subdirectories. Thus
+ *
+ * bar
+ * !foo/bar
+ *
+ * would result in foo/bar being unignored again. As with the
+ * first case,
+ *
+ * foo/bar
+ * !moo/foo/bar
+ *
+ * would do nothing, again.
  */
 static int does_negate_pattern(git_attr_fnmatch *rule, git_attr_fnmatch *neg)
 {
+	git_attr_fnmatch *longer, *shorter;
 	char *p;
 
 	if ((rule->flags & GIT_ATTR_FNMATCH_NEGATIVE) == 0
 		&& (neg->flags & GIT_ATTR_FNMATCH_NEGATIVE) != 0) {
-		/*
-		 * no chance of matching if rule is shorter than
-		 * the negated one
-		 */
-		if (rule->length < neg->length)
+
+		/* If lengths match we need to have an exact match */
+		if (rule->length == neg->length) {
+			return strcmp(rule->pattern, neg->pattern) == 0;
+		} else if (rule->length < neg->length) {
+			shorter = rule;
+			longer = neg;
+		} else {
+			shorter = neg;
+			longer = rule;
+		}
+
+		/* Otherwise, we need to check if the shorter
+		 * rule is a basename only (that is, it contains
+		 * no path separator) and, if so, if it
+		 * matches the tail of the longer rule */
+		p = longer->pattern + longer->length - shorter->length;
+
+		if (p[-1] != '/')
+			return false;
+		if (memchr(shorter->pattern, '/', shorter->length) != NULL)
 			return false;
 
-		/*
-		 * shift pattern so its tail aligns with the
-		 * negated pattern
-		 */
-		p = rule->pattern + rule->length - neg->length;
-		if (strcmp(p, neg->pattern) == 0)
-			return true;
+		return memcmp(p, shorter->pattern, shorter->length) == 0;
 	}
 
 	return false;
@@ -146,7 +175,7 @@ static int parse_ignore_file(
 		context = attrs->entry->path;
 
 	if (git_mutex_lock(&attrs->lock) < 0) {
-		giterr_set(GITERR_OS, "Failed to lock ignore file");
+		giterr_set(GITERR_OS, "failed to lock ignore file");
 		return -1;
 	}
 
@@ -248,8 +277,9 @@ int git_ignore__for_path(
 {
 	int error = 0;
 	const char *workdir = git_repository_workdir(repo);
+	git_buf infopath = GIT_BUF_INIT;
 
-	assert(ignores && path);
+	assert(repo && ignores && path);
 
 	memset(ignores, 0, sizeof(*ignores));
 	ignores->repo = repo;
@@ -293,10 +323,14 @@ int git_ignore__for_path(
 			goto cleanup;
 	}
 
+	if ((error = git_repository_item_path(&infopath,
+			repo, GIT_REPOSITORY_ITEM_INFO)) < 0)
+		goto cleanup;
+
 	/* load .git/info/exclude */
 	error = push_ignore_file(
 		ignores, &ignores->ign_global,
-		git_repository_path(repo), GIT_IGNORE_FILE_INREPO);
+		infopath.ptr, GIT_IGNORE_FILE_INREPO);
 	if (error < 0)
 		goto cleanup;
 
@@ -307,6 +341,7 @@ int git_ignore__for_path(
 			git_repository_attr_cache(repo)->cfg_excl_file);
 
 cleanup:
+	git_buf_free(&infopath);
 	if (error < 0)
 		git_ignore__free(ignores);
 
@@ -474,9 +509,9 @@ int git_ignore_path_is_ignored(
 	unsigned int i;
 	git_attr_file *file;
 
-	assert(ignored && pathname);
+	assert(repo && ignored && pathname);
 
-	workdir = repo ? git_repository_workdir(repo) : NULL;
+	workdir = git_repository_workdir(repo);
 
 	memset(&path, 0, sizeof(path));
 	memset(&ignores, 0, sizeof(ignores));

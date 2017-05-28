@@ -128,15 +128,15 @@ int git__strntol64(int64_t *result, const char *nptr, size_t nptr_len, const cha
 			v = c - 'A' + 10;
 		if (v >= base)
 			break;
-		nn = n*base + v;
-		if (nn < n)
+		nn = n * base + (neg ? -v : v);
+		if ((!neg && nn < n) || (neg && nn > n))
 			ovfl = 1;
 		n = nn;
 	}
 
 Return:
 	if (ndig == 0) {
-		giterr_set(GITERR_INVALID, "Failed to convert string to long. Not a number");
+		giterr_set(GITERR_INVALID, "failed to convert string to long: not a number");
 		return -1;
 	}
 
@@ -144,11 +144,11 @@ Return:
 		*endptr = p;
 
 	if (ovfl) {
-		giterr_set(GITERR_INVALID, "Failed to convert string to long. Overflow error");
+		giterr_set(GITERR_INVALID, "failed to convert string to long: overflow error");
 		return -1;
 	}
 
-	*result = neg ? -n : n;
+	*result = n;
 	return 0;
 }
 
@@ -169,7 +169,7 @@ int git__strntol32(int32_t *result, const char *nptr, size_t nptr_len, const cha
 
 	tmp_int = tmp_long & 0xFFFFFFFF;
 	if (tmp_int != tmp_long) {
-		giterr_set(GITERR_INVALID, "Failed to convert. '%s' is too large", nptr);
+		giterr_set(GITERR_INVALID, "failed to convert: '%s' is too large", nptr);
 		return -1;
 	}
 
@@ -781,6 +781,11 @@ int git__utf8_iterate(const uint8_t *str, int str_len, int32_t *dst)
 
 	*dst = uc;
 	return length;
+}
+
+double git_time_monotonic(void)
+{
+	return git__timer();
 }
 
 #ifdef GIT_WIN32
